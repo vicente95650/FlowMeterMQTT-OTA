@@ -12,7 +12,8 @@ const char thisSketch[] = "FlowMeterMQTT_v1.2";
 
 // Custom parameters (These will be saved to/loaded from LittleFS)
 char mqttServer[40] = "Mac-mini-2024.local";
-int measInterval = 9999; // default time interval in milliseconds
+//char mqttServer[40] = "192.168.3.32";
+int measInterval = 10000; // default time interval in milliseconds
 
 const int mqttPort = 1883;
 const char publish_topic[] = "from_esp8266_irrigation_pump";
@@ -118,6 +119,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
 void reconnectmqttserver() {
     while (!client.connected()) {
         Serial.print("Attempting to connect to MQTT broker ...");
+        Serial.print(mqttServer); 
+        Serial.println(" ...");
+
         String clientId = "ESP8266ClientIrrigationPump-";  
         clientId += String(random(0xffff), HEX);  
         
@@ -150,6 +154,9 @@ void setup() {
 
     // Set the MQTT callback
     client.setCallback(callback); 
+
+// format 
+// LittleFS.format();
 
     // --- Load saved variables from Flash Memory ---
     loadConfig();
