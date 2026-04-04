@@ -1,3 +1,6 @@
+// april 3, 2026 8:30AM modified  the code to implement the on-demand "request/response" JSON status feature.
+// will subscribe to multiple MQTT topics. Implemented digital inputs
+
 #include <ESP8266WiFi.h>  // Includes the core library for Wi-Fi connectivity.
 #include <PubSubClient.h> // Includes the library for MQTT publishing and subscribing.
 #include <LittleFS.h>     // Includes the library for persistent flash memory storage.
@@ -31,6 +34,14 @@ PubSubClient client(espClient); // Initializes the MQTT client using the network
 
 // Flag to indicate if WiFiManager changed settings
 bool shouldSaveConfig = false; // A flag to track if the user updated parameters via the captive portal.
+
+// defining new topics for on-demand request/response JSON status feature 
+const char control_topic[] = "to_esp8266_irrigation_pump_control"; 
+const char status_topic[] = "status_esp8266_irrigation_pump"; 
+
+// Digital Input Pins (Using GPIO 4 and 12 as examples)
+const byte inputPin1 = 4;
+const byte inputPin2 = 12;
 
 // WiFiManager callback notifying us of the need to save config
 void saveConfigCallback () {
@@ -90,53 +101,94 @@ void loadConfig() {
   }
 }
 
-// Callback function for handling subscribed messages
+// Callback function for handling subscribed messages - which now arrive on multiple topics.
+// this new version uses strcmp (string compare) to figure out which topic the message arrived on, and then processes the payload accordingly.
 void callback(char* topic, byte* payload, unsigned int length) {
-  String MQTT_DATA = ""; // Creates an empty string object.
-  for (int i=0; i < length; i++) { // Loops through every byte of the incoming payload.
-    MQTT_DATA += (char)payload[i]; // Casts each byte to a character and appends it to the string.
+  String MQTT_DATA = ""; 
+  for (int i=0; i < length; i++) { 
+    MQTT_DATA += (char)payload[i]; 
   }
   
-  Serial.print("received data on topic: "); // Prints a debug message.
-  Serial.println(topic); // Prints the topic name.
+  Serial.print("Message arrived on topic: "); 
+  Serial.println(topic); 
   
-  int stringLength = MQTT_DATA.length()+1; // Calculates the required size for a character array (including null terminator).
-  char arrayChars[stringLength]; // Creates a character array of that size.
-  MQTT_DATA.toCharArray(arrayChars,stringLength); // Copies the string contents into the character array.
+  // ROUTE 1: If the message is on the interval update topic
+  if (strcmp(topic, subscribe_topic) == 0) {
+    int stringLength = MQTT_DATA.length()+1; 
+    char arrayChars[stringLength]; 
+    MQTT_DATA.toCharArray(arrayChars,stringLength); 
+    
+    // RESTORED ECHO: Publishes the received command back to the original topic
+    // I should probably remove it even though I seldome change the measurement interval
+    client.publish(publish_topic, arrayChars); 
+    
+    measInterval = char2int(arrayChars); 
+    Serial.print("New measurement interval: "); 
+    Serial.println(measInterval); 
+    saveConfig(); // Save the new interval to flash memory
+  }
   
-  client.publish(publish_topic, arrayChars); // Echos the received command back to the publish topic.
-  
-  // Update interval dynamically over MQTT
-  measInterval = char2int(arrayChars); // Converts the payload to an integer and updates the global interval.
-  Serial.print("new measurement interval:  "); // Prints a debug message.
-  Serial.println(measInterval); // Prints the new interval.
+  // ROUTE 2: If the message is on the new control topic
+  else if (strcmp(topic, control_topic) == 0) {
+    
+    // Check if Node-RED is asking for a status update
+    if (MQTT_DATA == "GET_STATUS") {
+      
+      // Create a JSON document (Using the correct ArduinoJson v7 syntax)
+      JsonDocument statusDoc; 
+      
+      // Populate the JSON document. Note that I don't do much processing here but rather at the node-red end
+      statusDoc["ip"] = WiFi.localIP().toString();
+      statusDoc["version"] = thisSketch;
+      statusDoc["meas_interval"] = measInterval;
+      statusDoc["pulse_count"] = pulseCount; 
+      statusDoc["input_1"] = digitalRead(inputPin1); 
+      statusDoc["input_2"] = digitalRead(inputPin2); 
 
-  // Save the new MQTT-provided interval permanently!
-  saveConfig(); // Calls the function to write the new interval to flash memory.
+      // CRITICAL FIX: Create a character array buffer with a size of 256 bytes
+      char statusBuffer[256]; 
+      
+      // Convert JSON object into the character array and publish
+      serializeJson(statusDoc, statusBuffer); 
+      client.publish(status_topic, statusBuffer); 
+      
+      Serial.print("Published Status JSON: ");
+      Serial.println(statusBuffer);
+    }
+    
+    // You can easily add more commands later for your digital outputs!
+    // else if (MQTT_DATA == "TURN_PUMP_ON") { ... }
+  }
 }
 
 // Connect to mqtt server and reconnect
 void reconnectmqttserver() {
-  while (!client.connected()) { // Loops continuously if the MQTT client is disconnected.
-    Serial.print("Attempting to connect to MQTT broker ..."); // Prints a debug message.
-    Serial.print(mqttServer); // Prints the target server address.
-    Serial.println(" ..."); // Prints formatting.
-
-    String clientId = "ESP8266ClientIrrigationPump-"; // Sets the base client ID string.
-    clientId += String(random(0xffff), HEX); // Appends a random hexadecimal number to ensure uniqueness.
+  while (!client.connected()) {
     
-    if (client.connect(clientId.c_str())) { // Attempts to connect to the broker using the unique ID.
-      Serial.println("connected!"); // Prints a success message.
-      client.subscribe(subscribe_topic); // Subscribes to the command topic.
+    // 1. Keep OTA alive even if MQTT or Wi-Fi is failing!
+    ArduinoOTA.handle();
+
+    Serial.print("Attempting to connect to MQTT broker ...");
+    Serial.print(mqttServer);
+    Serial.println(" ...");
+
+    // 2. Use a unique, hardcoded Client ID to prevent ALL conflicts
+    String clientId = "ESP8266-FlowMeter-Unique-1"; 
+    
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected!");
+      client.subscribe(subscribe_topic); 
+            client.subscribe(control_topic); 
+
       
-      char publish_payload[] = "the esp8266 mqtt client is connected to mqtt broker"; // Creates a startup message.
-      client.publish(publish_topic,publish_payload); // Publishes the startup message to announce its presence.
+      char publish_payload[] = "the esp8266 mqtt client is connected to mqtt broker";
+      client.publish(publish_topic,publish_payload);
     }
     else {
-      Serial.print("failed, rc="); // Prints a failure message.
-      Serial.print(client.state()); // Prints the error code from the broker.
-      Serial.println(" try again in 5 seconds"); // Prints retry info.
-      delay(5000); // Waits 5 seconds before trying again.
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
     }
   }
 }
@@ -151,6 +203,11 @@ void setup() {
   // Initialize flow sensor pin and attach interrupt
   pinMode(sensorPin, INPUT_PULLUP); // Sets the sensor pin as an input with the internal pull-up resistor enabled.
   attachInterrupt(digitalPinToInterrupt(sensorPin), pulseCounter, FALLING); // Attaches the pulseCounter interrupt to trigger when the pin goes from HIGH to LOW.
+
+// initialize input pins 
+pinMode(inputPin1, INPUT_PULLUP);
+pinMode(inputPin2, INPUT_PULLUP); 
+
 
   // Set the MQTT callback
   client.setCallback(callback); // Tells the MQTT client which function to run when a message arrives.
