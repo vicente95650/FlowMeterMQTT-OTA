@@ -1,5 +1,7 @@
 // april 3, 2026 8:30AM modified  the code to implement the on-demand "request/response" JSON status feature.
 // will subscribe to multiple MQTT topics. Implemented digital inputs
+// april 9 renamed topics to reflect this esp8266 will monitor pond pump instead of irrigation pump. 
+
 
 #include <ESP8266WiFi.h>  // Includes the core library for Wi-Fi connectivity.
 #include <PubSubClient.h> // Includes the library for MQTT publishing and subscribing.
@@ -14,14 +16,18 @@
 const char thisSketch[] = "FlowMeterMQTT_v1.0"; // Defines the version of the sketch as a constant character array.
 
 // Custom parameters (These will be saved to/loaded from LittleFS)
-char mqttServer[20] = "Mac-mini-2024.local"; // Sets the default MQTT server hostname (up to 40 characters).
-//char mqttServer[20] = "192.168.3.32"; // Commented out alternative for a hardcoded IP address.
+// these assignment will be used (as default values) if not found in LittleFS
+//char mqttServer[20] = "Mac-mini-2024.local"; // Sets the default MQTT server hostname (up to 40 characters).
+//char mqttServer[20] = "192.168.3.47"; // Commented out alternative for a hardcoded IP address of mac-mini-2024 .
+char mqttServer[20] = "192.168.3.62";  // mosquitto broker (a Docker container that is part of IOTStack) running in my Debian VM in HomeLab
 
 int measInterval = 10000; // Sets the default measurement interval to 10 seconds (10,000 ms).
 const int mqttPort = 1883; // Sets the standard MQTT port.
 
-const char publish_topic[] = "from_esp8266_irrigation_pump"; // Defines the topic to publish sensor data to.
-const char subscribe_topic[] = "to_esp8266_irrigation_pump"; // Defines the topic to listen for incoming commands.
+//const char publish_topic[] = "from_esp8266_irrigation_pump"; // Defines the topic to publish sensor data to.
+//const char subscribe_topic[] = "to_esp8266_irrigation_pump"; // Defines the topic to listen for incoming commands.
+const char publish_topic[] = "from_esp8266_pond_pump_pulseCount"; // Defines the topic to publish sensor data to.
+const char subscribe_topic[] = "to_esp8266_pond_pump_measInterval"; // Defines the topic to listen for incoming commands.
 
 // Flow rate sensor related variables
 const byte sensorPin = 5; // Defines GPIO 5 (D1) as the pin connected to the flow sensor.
@@ -36,8 +42,10 @@ PubSubClient client(espClient); // Initializes the MQTT client using the network
 bool shouldSaveConfig = false; // A flag to track if the user updated parameters via the captive portal.
 
 // defining new topics for on-demand request/response JSON status feature 
-const char control_topic[] = "to_esp8266_irrigation_pump_control"; 
-const char status_topic[] = "status_esp8266_irrigation_pump"; 
+//const char control_topic[] = "to_esp8266_irrigation_pump_control"; 
+//const char status_topic[] = "status_esp8266_irrigation_pump"; 
+const char control_topic[] = "to_esp8266_pond_pump_control"; 
+const char status_topic[] = "status_from_esp8266_pond_pump"; 
 
 // Digital Input Pins (Using GPIO 4 and 12 as examples)
 const byte inputPin1 = 4;
@@ -119,7 +127,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     MQTT_DATA.toCharArray(arrayChars,stringLength); 
     
     // RESTORED ECHO: Publishes the received command back to the original topic
-    // I should probably remove it even though I seldome change the measurement interval
+    // I should probably remove it even though I seldom change the measurement interval
     client.publish(publish_topic, arrayChars); 
     
     measInterval = char2int(arrayChars); 
@@ -145,8 +153,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
       statusDoc["input_1"] = digitalRead(inputPin1); 
       statusDoc["input_2"] = digitalRead(inputPin2); 
 
+      // --- NEW LINE: Add the mqttServer variable to the JSON payload ---
+      // had to increase mqtt packet size limit to accomodate this
+      statusDoc["mqtt_server"] = mqttServer; 
+
+      // --- NEW LINE: Report Wi-Fi Signal Strength ---
+      statusDoc["wifi_rssi"] = WiFi.RSSI(); 
+
+
       // CRITICAL FIX: Create a character array buffer with a size of 256 bytes
-      char statusBuffer[256]; 
+      char statusBuffer[512]; 
       
       // Convert JSON object into the character array and publish
       serializeJson(statusDoc, statusBuffer); 
@@ -212,8 +228,12 @@ pinMode(inputPin2, INPUT_PULLUP);
   // Set the MQTT callback
   client.setCallback(callback); // Tells the MQTT client which function to run when a message arrives.
 
-  // format
-  // LittleFS.format(); // Commented out line used to wipe the flash memory.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+  // format file system in flash memory 
+  // uncomment to wipe the flash memory so esp8266 will use the value defined here in code for mqtt server.
+  // comment out immediately and upload once more or flash memory will be wiped out repeatedly on reboot.
+  // LittleFS.format(); 
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
   // --- Load saved variables from Flash Memory ---
   loadConfig(); // Reads the config.json file to apply custom parameters before connecting to Wi-Fi.
@@ -251,6 +271,9 @@ pinMode(inputPin2, INPUT_PULLUP);
 
   // Configure MQTT client
   client.setServer(mqttServer, mqttPort); // Tells the MQTT library the IP/hostname and port to use.
+
+   // --- NEW LINE: Increase the MQTT packet size limit to 512 bytes ---
+  client.setBufferSize(512); 
   
   // --- Initialize Over-The-Air (OTA) Updates ---
   ArduinoOTA.setHostname("FlowMeter-OTA"); // Sets the network hostname for wireless flashing.
