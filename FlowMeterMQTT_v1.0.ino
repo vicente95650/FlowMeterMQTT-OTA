@@ -2,6 +2,8 @@
 // will subscribe to multiple MQTT topics. Implemented digital inputs
 // april 9 renamed topics to reflect this esp8266 will monitor pond pump instead of irrigation pump. 
 // added digital outputs
+// april 10 7am renamed topics (removed the to_esp8266 and from_esp8266 prefixes) to make them more generic and reusable for other projects.
+
 
 
 
@@ -28,14 +30,15 @@ const int mqttPort = 1883; // Sets the standard MQTT port.
 
 //const char publish_topic[] = "from_esp8266_irrigation_pump"; // Defines the topic to publish sensor data to.
 //const char subscribe_topic[] = "to_esp8266_irrigation_pump"; // Defines the topic to listen for incoming commands.
-const char publish_topic[] = "from_esp8266_pond_pump_pulseCount"; // Defines the topic to publish sensor data to.
-const char subscribe_topic[] = "to_esp8266_pond_pump_measInterval"; // Defines the topic to listen for incoming commands.
+const char publish_topic[] = "pond_pump_pulseCount"; // Defines the topic to publish sensor data to.
+const char subscribe_topic[] = "pond_pump_measInterval"; // Defines the topic to listen for incoming commands.
 
 // Flow rate sensor related variables
 const byte sensorPin = 5; // Defines GPIO 5 (D1) as the pin connected to the flow sensor.
 volatile int pulseCount = 0; // A volatile variable to store the number of pulses counted by the interrupt.
 unsigned long initialTime = 0; // Stores the start time of the current measurement cycle.
-char msgmqtt[21]; // Creates an 8-byte character array to hold the formatted payload for publishing.
+char msgmqtt[21]; // Creates a character array to hold the formatted payload for publishing. This will represent pulseCount which is an integer and which can be represented with 13 characters.
+
 
 WiFiClient espClient; // Creates the base TCP network client.
 PubSubClient client(espClient); // Initializes the MQTT client using the network client.
@@ -46,8 +49,8 @@ bool shouldSaveConfig = false; // A flag to track if the user updated parameters
 // defining new topics for on-demand request/response JSON status feature 
 //const char control_topic[] = "to_esp8266_irrigation_pump_control"; 
 //const char status_topic[] = "status_esp8266_irrigation_pump"; 
-const char control_topic[] = "to_esp8266_pond_pump_control"; 
-const char status_topic[] = "status_from_esp8266_pond_pump"; 
+const char control_topic[] = "pond_pump_control"; 
+const char status_topic[] = "pond_pump_status"; 
 
 // Digital Input Pins (Using GPIO 4 and 12 as examples)
 const byte inputPin1 = 4;
@@ -129,23 +132,24 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived on topic: "); 
   Serial.println(topic); 
   
-  // ROUTE 1: If the message is on the interval update topic
+  // ROUTE 1: If the message is on the interval update topic then use the payload to update the measurement interval
   if (strcmp(topic, subscribe_topic) == 0) {
     int stringLength = MQTT_DATA.length()+1; 
     char arrayChars[stringLength]; 
     MQTT_DATA.toCharArray(arrayChars,stringLength); 
     
-    // RESTORED ECHO: Publishes the received command back to the original topic
-    // I should probably remove it even though I seldom change the measurement interval
-    client.publish(publish_topic, arrayChars); 
+    // echo the value of measurement interval just received.
+    // Publishes the received command back to the original topic
+    // client.publish(publish_topic, arrayChars); 
     
     measInterval = char2int(arrayChars); 
-    Serial.print("New measurement interval: "); 
+    Serial.print("esp8266 just received a new measurement interval: "); 
     Serial.println(measInterval); 
     saveConfig(); // Save the new interval to flash memory
   }
   
-  // ROUTE 2: If the message is on the new control topic
+  // ROUTE 2: If the message is on the control topic it could mean one of various commands. We will use the payload to determine which command and then execute it. 
+
   else if (strcmp(topic, control_topic) == 0) {
     
     // 1. Check if Node-RED is asking for a status update
@@ -154,23 +158,17 @@ void callback(char* topic, byte* payload, unsigned int length) {
       // Create a JSON document (Using the correct ArduinoJson v7 syntax)
       JsonDocument statusDoc; 
       
-      // Populate the JSON document. Note that I don't do much processing here but rather at the node-red end
+      // Populate the JSON document with various status information. Note that I don't do much processing here but rather at the node-red end
       statusDoc["ip"] = WiFi.localIP().toString();
       statusDoc["version"] = thisSketch;
       statusDoc["meas_interval"] = measInterval;
       statusDoc["pulse_count"] = pulseCount; 
       statusDoc["input_1"] = digitalRead(inputPin1); 
       statusDoc["input_2"] = digitalRead(inputPin2); 
+      statusDoc["mqtt_server"] = mqttServer; // had to increase mqtt packet size limit to accomodate this
+      statusDoc["wifi_rssi"] = WiFi.RSSI(); // Report Wi-Fi Signal Strength
 
-      // --- NEW LINE: Add the mqttServer variable to the JSON payload ---
-      // had to increase mqtt packet size limit to accomodate this
-      statusDoc["mqtt_server"] = mqttServer; 
-
-      // --- NEW LINE: Report Wi-Fi Signal Strength ---
-      statusDoc["wifi_rssi"] = WiFi.RSSI(); 
-
-
-      // CRITICAL FIX: Create a character array buffer with a size of 256 bytes
+      // CRITICAL FIX: Create a character array buffer with a size of 512 bytes
       char statusBuffer[512]; 
       
       // Convert JSON object into the character array and publish
@@ -181,8 +179,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
       Serial.println(statusBuffer);
     }
     
-    // You can easily add more commands later for your digital outputs!
-    // else if (MQTT_DATA == "TURN_PUMP_ON") { ... }
     // 2. Check for Digital Output 1 Commands
         else if (MQTT_DATA == "OUT1_ON") {
             digitalWrite(outputPin1, HIGH);
@@ -202,6 +198,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
             digitalWrite(outputPin2, LOW);
             Serial.println("Output 2 turned OFF");
         }
+        // You can easily add more commands later!
+    // else if (MQTT_DATA == "TURN_PUMP_ON") { ... }
   }
 }
 
@@ -332,7 +330,7 @@ void loop() {
       initialTime = now; // Resets the start time to 'now' for the next cycle.
       
       // Publish pulseCount to MQTT broker
-      snprintf (msgmqtt, 50, "%d ",pulseCount); // Converts the integer pulseCount into the msgmqtt character array.
+      snprintf (msgmqtt, sizeof(msgmqtt), "%d ",pulseCount); // Converts the integer pulseCount into the msgmqtt character array.
       client.publish(publish_topic, msgmqtt); // Publishes the counted pulses to your MQTT broker.
       
       // Reset the count in preparation for new meas. interval
