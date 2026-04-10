@@ -1,6 +1,8 @@
 // april 3, 2026 8:30AM modified  the code to implement the on-demand "request/response" JSON status feature.
 // will subscribe to multiple MQTT topics. Implemented digital inputs
 // april 9 renamed topics to reflect this esp8266 will monitor pond pump instead of irrigation pump. 
+// added digital outputs
+
 
 
 #include <ESP8266WiFi.h>  // Includes the core library for Wi-Fi connectivity.
@@ -50,6 +52,13 @@ const char status_topic[] = "status_from_esp8266_pond_pump";
 // Digital Input Pins (Using GPIO 4 and 12 as examples)
 const byte inputPin1 = 4;
 const byte inputPin2 = 12;
+
+// digital output pins
+// will control with topic "to_esp8266_pond_pump_control"
+const int outputPin1 = 13; // Labeled D7 on NodeMCU
+const int outputPin2 = 14; // Labeled D5 on NodeMCU
+
+
 
 // WiFiManager callback notifying us of the need to save config
 void saveConfigCallback () {
@@ -139,7 +148,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   // ROUTE 2: If the message is on the new control topic
   else if (strcmp(topic, control_topic) == 0) {
     
-    // Check if Node-RED is asking for a status update
+    // 1. Check if Node-RED is asking for a status update
     if (MQTT_DATA == "GET_STATUS") {
       
       // Create a JSON document (Using the correct ArduinoJson v7 syntax)
@@ -174,6 +183,25 @@ void callback(char* topic, byte* payload, unsigned int length) {
     
     // You can easily add more commands later for your digital outputs!
     // else if (MQTT_DATA == "TURN_PUMP_ON") { ... }
+    // 2. Check for Digital Output 1 Commands
+        else if (MQTT_DATA == "OUT1_ON") {
+            digitalWrite(outputPin1, HIGH);
+            Serial.println("Output 1 turned ON");
+        } 
+        else if (MQTT_DATA == "OUT1_OFF") {
+            digitalWrite(outputPin1, LOW);
+            Serial.println("Output 1 turned OFF");
+        }
+        
+        // 3. Check for Digital Output 2 Commands
+        else if (MQTT_DATA == "OUT2_ON") {
+            digitalWrite(outputPin2, HIGH);
+            Serial.println("Output 2 turned ON");
+        } 
+        else if (MQTT_DATA == "OUT2_OFF") {
+            digitalWrite(outputPin2, LOW);
+            Serial.println("Output 2 turned OFF");
+        }
   }
 }
 
@@ -215,6 +243,12 @@ void setup() {
   
   Serial.print("running sketch: "); // Prints a debug message.
   Serial.println(thisSketch); // Prints the current version of the code.
+
+
+
+// Set digital outputs to a safe default state on boot
+  digitalWrite(outputPin1, LOW);
+  digitalWrite(outputPin2, LOW);
 
   // Initialize flow sensor pin and attach interrupt
   pinMode(sensorPin, INPUT_PULLUP); // Sets the sensor pin as an input with the internal pull-up resistor enabled.
